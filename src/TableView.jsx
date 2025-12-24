@@ -74,6 +74,23 @@ function TableView() {
   const [priceHistories, setPriceHistories] = useState({});
   const [translating, setTranslating] = useState(false);
   const [translationSuccess, setTranslationSuccess] = useState(false);
+  const [rowSelection, setRowSelection] = useState({});
+  const [editProductDialogOpen, setEditProductDialogOpen] = useState(false);
+  const [editingProduct, setEditingProduct] = useState(null);
+  const [editProductForm, setEditProductForm] = useState({
+    category: '',
+    name: { en: '', hi: '', te: '' },
+    description: { en: '', hi: '', te: '' },
+    price: ''
+  });
+  const [updatingProduct, setUpdatingProduct] = useState(false);
+  // Confirmation dialog states
+  const [confirmDeleteSelectedOpen, setConfirmDeleteSelectedOpen] = useState(false);
+  const [confirmDisableOpen, setConfirmDisableOpen] = useState(false);
+  const [confirmEnableOpen, setConfirmEnableOpen] = useState(false);
+  const [confirmSaveOpen, setConfirmSaveOpen] = useState(false);
+  const [confirmAddProductOpen, setConfirmAddProductOpen] = useState(false);
+  const [confirmUpdateProductOpen, setConfirmUpdateProductOpen] = useState(false);
   const { i18n, t } = useTranslation();
   const navigate = useNavigate();
 
@@ -87,10 +104,32 @@ function TableView() {
       const response = await fetch(API_ENDPOINTS.PRODUCTS);
       if (!response.ok) throw new Error('Failed to fetch products');
       const products = await response.json();
-      // Adapt the data: imageUrls = imageIds
+      // Adapt the data: imageUrls = imageIds and normalize disabled flag
       const adapted = products
         .filter(p => isNumericId(p.id))
-        .map(p => ({ ...p, imageUrls: p.imageIds || [] }));
+        .map(p => {
+          // Normalize various backend flags (boolean, 0/1, string) to a single isDisabled boolean
+          const raw =
+            p.disabled ??
+            p.isDisabled ??
+            p.is_disabled;
+
+          let isDisabled = false;
+          if (
+            raw === true ||
+            raw === 'true' ||
+            raw === 1 ||
+            raw === '1'
+          ) {
+            isDisabled = true;
+          }
+
+          return {
+            ...p,
+            imageUrls: p.imageIds || [],
+            isDisabled,
+          };
+        });
       setData(adapted);
       setEditedData(adapted);
     } catch (error) {
@@ -172,6 +211,7 @@ function TableView() {
   };
 
   const handleSave = async () => {
+    setConfirmSaveOpen(false);
     setSaving(true);
     try {
       // Only update rows where price has changed
@@ -213,6 +253,115 @@ function TableView() {
       setEditedData(prev => prev.filter(p => p.id !== row.id));
     } catch (error) {
       // Optionally show error
+    }
+    setSaving(false);
+  };
+
+  // Handle delete for selected products
+  const handleDeleteSelectedProducts = async () => {
+    const selectedIds = Object.keys(rowSelection).filter(key => rowSelection[key]);
+    if (selectedIds.length === 0) return;
+    setConfirmDeleteSelectedOpen(true);
+  };
+
+  const confirmDeleteSelectedProducts = async () => {
+    const selectedIds = Object.keys(rowSelection).filter(key => rowSelection[key]);
+    setConfirmDeleteSelectedOpen(false);
+    setSaving(true);
+    try {
+      await Promise.all(selectedIds.map(async (productId) => {
+        const response = await fetch(`${API_ENDPOINTS.PRODUCTS}/${productId}`, {
+          method: 'DELETE',
+        });
+        if (!response.ok) throw new Error(`Failed to delete product ${productId}`);
+      }));
+      await fetchProducts(); // Refresh data
+      setRowSelection({}); // Clear selection
+    } catch (error) {
+      console.error('Error deleting products:', error);
+    }
+    setSaving(false);
+  };
+
+  // Handle disable for selected products
+  const handleDisableSelectedProducts = async () => {
+    const selectedIds = Object.keys(rowSelection).filter(key => rowSelection[key]);
+    if (selectedIds.length === 0) return;
+    setConfirmDisableOpen(true);
+  };
+
+  const confirmDisableSelectedProducts = async () => {
+    const selectedIds = Object.keys(rowSelection).filter(key => rowSelection[key]);
+    setConfirmDisableOpen(false);
+    setSaving(true);
+    try {
+      // Call backend to disable and optimistically update UI
+      await Promise.all(selectedIds.map(async (productId) => {
+        const response = await fetch(`${API_ENDPOINTS.PRODUCTS}/${productId}/disable`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ is_disable: true }),
+        });
+        if (!response.ok) {
+          console.warn(`Disable endpoint may not exist for product ${productId}`);
+          return;
+        }
+      }));
+      // Optimistically mark disabled in UI
+      setData(prev =>
+        prev.map(p =>
+          selectedIds.includes(String(p.id)) ? { ...p, isDisabled: true } : p
+        ),
+      );
+      setEditedData(prev =>
+        prev.map(p =>
+          selectedIds.includes(String(p.id)) ? { ...p, isDisabled: true } : p
+        ),
+      );
+      setRowSelection({}); // Clear selection
+    } catch (error) {
+      console.error('Error disabling products:', error);
+    }
+    setSaving(false);
+  };
+
+  // Handle enable for selected products
+  const handleEnableSelectedProducts = async () => {
+    const selectedIds = Object.keys(rowSelection).filter(key => rowSelection[key]);
+    if (selectedIds.length === 0) return;
+    setConfirmEnableOpen(true);
+  };
+
+  const confirmEnableSelectedProducts = async () => {
+    const selectedIds = Object.keys(rowSelection).filter(key => rowSelection[key]);
+    setConfirmEnableOpen(false);
+    setSaving(true);
+    try {
+      await Promise.all(selectedIds.map(async (productId) => {
+        const response = await fetch(`${API_ENDPOINTS.PRODUCTS}/${productId}/enable`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ is_disable: false }),
+        });
+        if (!response.ok) {
+          console.warn(`Enable endpoint may not exist for product ${productId}`);
+          return;
+        }
+      }));
+      // Optimistically mark enabled in UI
+      setData(prev =>
+        prev.map(p =>
+          selectedIds.includes(String(p.id)) ? { ...p, isDisabled: false } : p
+        ),
+      );
+      setEditedData(prev =>
+        prev.map(p =>
+          selectedIds.includes(String(p.id)) ? { ...p, isDisabled: false } : p
+        ),
+      );
+      setRowSelection({}); // Clear selection
+    } catch (error) {
+      console.error('Error enabling products:', error);
     }
     setSaving(false);
   };
@@ -326,7 +475,156 @@ function TableView() {
     });
   };
 
+  // Handle edit product - open dialog with product data
+  const handleEditProduct = (product) => {
+    // Helper to get localized value
+    const getLocalized = (obj) => {
+      if (!obj) return '';
+      if (typeof obj === 'string') return obj;
+      return obj;
+    };
+
+    const productName = getLocalized(product.name);
+    const productDescription = getLocalized(product.description);
+
+    setEditingProduct(product);
+    setEditProductForm({
+      category: product.category || '',
+      name: {
+        en: productName?.en || productName || '',
+        hi: productName?.hi || '',
+        te: productName?.te || ''
+      },
+      description: {
+        en: productDescription?.en || productDescription || '',
+        hi: productDescription?.hi || '',
+        te: productDescription?.te || ''
+      },
+      price: product.price || ''
+    });
+    setEditProductDialogOpen(true);
+  };
+
+  // Handle edit product field changes with auto-translation
+  const handleEditProductFieldChange = async (field, value, lang = null) => {
+    setEditProductForm(prev => {
+      if (field === 'name' || field === 'description') {
+        const updatedField = { ...prev[field], [lang]: value };
+        
+        // Auto-translate when English name is changed
+        if (field === 'name' && lang === 'en' && value.trim()) {
+          setTranslating(true);
+          
+          // Translate to Hindi and Telugu
+          Promise.all([
+            translateText(value, 'hi'),
+            translateText(value, 'te')
+          ]).then(([hindiText, teluguText]) => {
+            setEditProductForm(current => ({
+              ...current,
+              name: { 
+                ...current.name, 
+                hi: hindiText || current.name.hi,
+                te: teluguText || current.name.te
+              }
+            }));
+            setTranslating(false);
+            if (hindiText || teluguText) {
+              setTranslationSuccess(true);
+              setTimeout(() => setTranslationSuccess(false), 3000);
+            }
+          }).catch(() => {
+            setTranslating(false);
+          });
+        }
+        
+        // Auto-translate when English description is changed
+        if (field === 'description' && lang === 'en' && value.trim()) {
+          setTranslating(true);
+          
+          // Translate to Hindi and Telugu
+          Promise.all([
+            translateText(value, 'hi'),
+            translateText(value, 'te')
+          ]).then(([hindiText, teluguText]) => {
+            setEditProductForm(current => ({
+              ...current,
+              description: { 
+                ...current.description, 
+                hi: hindiText || current.description.hi,
+                te: teluguText || current.description.te
+              }
+            }));
+            setTranslating(false);
+            if (hindiText || teluguText) {
+              setTranslationSuccess(true);
+              setTimeout(() => setTranslationSuccess(false), 3000);
+            }
+          }).catch(() => {
+            setTranslating(false);
+          });
+        }
+        
+        return { ...prev, [field]: updatedField };
+      }
+      return { ...prev, [field]: value };
+    });
+  };
+
+  // Handle update product
+  const handleUpdateProduct = async () => {
+    if (!editingProduct || !editingProduct.id) return;
+    setConfirmUpdateProductOpen(true);
+  };
+
+  const confirmUpdateProduct = async () => {
+    if (!editingProduct || !editingProduct.id) return;
+    setConfirmUpdateProductOpen(false);
+    setUpdatingProduct(true);
+    try {
+      const response = await fetch(API_ENDPOINTS.PRODUCT_UPDATE(editingProduct.id), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          category: editProductForm.category,
+          nameJson: JSON.stringify(editProductForm.name),
+          descriptionJson: JSON.stringify(editProductForm.description)
+        })
+      });
+      if (!response.ok) throw new Error('Failed to update product');
+      await fetchProducts(); // Refresh data
+      setEditProductDialogOpen(false);
+      setEditingProduct(null);
+      setEditProductForm({
+        category: '',
+        name: { en: '', hi: '', te: '' },
+        description: { en: '', hi: '', te: '' },
+        price: ''
+      });
+    } catch (error) {
+      console.error('Error updating product:', error);
+    }
+    setUpdatingProduct(false);
+  };
+
+  // Handle close edit product dialog
+  const handleCloseEditProductDialog = () => {
+    setEditProductDialogOpen(false);
+    setEditingProduct(null);
+    setEditProductForm({
+      category: '',
+      name: { en: '', hi: '', te: '' },
+      description: { en: '', hi: '', te: '' },
+      price: ''
+    });
+  };
+
   const handleAddProduct = async () => {
+    setConfirmAddProductOpen(true);
+  };
+
+  const confirmAddProduct = async () => {
+    setConfirmAddProductOpen(false);
     setAdding(true);
     try {
       // Send product details to backend
@@ -395,17 +693,29 @@ function TableView() {
           }
           setAddImageUploading(false);
         }
+        
+        // Close dialog and reset form after successful product creation
+        setAddDialogOpen(false);
+        setNewProductId(null);
+        setAddProductImages([]);
+        setAddImageFile(null);
+        setAddImageFiles([]);
+        setPendingNewProductImages([]);
+        setAddImageUploadSuccess(false);
+        setAddImageUploadError("");
+        setNewProduct({
+          category: '',
+          name: { en: '', hi: '', te: '' },
+          description: { en: '', hi: '', te: '' },
+          price: '',
+          imageUrls: ['']
+        });
+        // Refresh products to ensure UI is in sync
+        await fetchProducts();
       }
-      // Don't close dialog yet, allow image upload
-      setNewProduct({
-        category: '',
-        name: { en: '', hi: '', te: '' },
-        description: { en: '', hi: '', te: '' },
-        price: '',
-        imageUrls: ['']
-      });
     } catch (error) {
       // Optionally show error
+      console.error('Error adding product:', error);
     }
     setAdding(false);
   };
@@ -413,18 +723,27 @@ function TableView() {
   const handleEdit = () => {
     setEditMode(true);
     setEditField('both');
+    setRowSelection({}); // Clear selection when entering edit mode
   };
 
   const handleCancelEdit = () => {
     setEditMode(false);
     setEditField(null);
     setEditedData(data);
+    setRowSelection({}); // Clear selection when exiting edit mode
   };
 
   const handleOpenImageDialog = async (rowIndex, edit = false) => {
     setImageDialogRowIndex(rowIndex);
     setImageDialogEditMode(edit);
     setImageDialogOpen(true);
+    // Reset upload states when opening in edit mode
+    if (edit) {
+      setPendingImageFiles([]);
+      setUploadError("");
+      setUploadSuccess(false);
+      setImageEditSaveSuccess(false);
+    }
     // Only fetch images for view mode
     if (!edit) {
       setViewImagesLoading(true);
@@ -449,6 +768,10 @@ function TableView() {
     setImageDialogOpen(false);
     setImageDialogRowIndex(null);
     setImageDialogEditMode(false);
+    setPendingImageFiles([]);
+    setUploadError("");
+    setUploadSuccess(false);
+    setImageEditSaveSuccess(false);
     fetchProducts(); // Ensure UI is in sync after all edits
   };
 
@@ -480,28 +803,75 @@ function TableView() {
   const handleImageDialogDeleteImage = async (imgIdx) => {
     if (imageDialogRowIndex === null) return;
     const product = editedData[imageDialogRowIndex];
+    const productId = product?.id;
     const imageId = product?.imageUrls?.[imgIdx];
-    if (!imageId) return;
+    
+    // Validate inputs
+    if (!imageId) {
+      console.error('No image ID found at index:', imgIdx);
+      setUploadError('Cannot delete: No image ID found.');
+      return;
+    }
+    
+    if (!productId || isNaN(Number(productId))) {
+      console.error('Invalid product ID:', productId);
+      setUploadError('Cannot delete: Invalid product ID.');
+      return;
+    }
+    
+    // Check if imageId is a valid number (for backend images)
+    if (isNaN(Number(imageId))) {
+      console.error('Invalid image ID (not a number):', imageId);
+      // If it's not a number, it might be a URL or empty string - just remove from local state
+      const updatedImageUrls = (product.imageUrls || []).filter((id, idx) => idx !== imgIdx);
+      setEditedData(prev => prev.map((row, idx) => {
+        if (idx === imageDialogRowIndex) {
+          return { ...row, imageUrls: updatedImageUrls };
+        }
+        return row;
+      }));
+      return;
+    }
+    
     setDeletingImageIdx(imgIdx);
+    setUploadError("");
+    
     try {
-              const response = await fetch(API_ENDPOINTS.PRODUCT_IMAGE(imageId), {
+      // Delete the image file from backend
+      const deleteResponse = await fetch(API_ENDPOINTS.PRODUCT_IMAGE_DELETE(imageId), {
         method: 'DELETE',
       });
-      if (response.ok) {
+      
+      if (deleteResponse.ok) {
+        // Image deleted successfully - backend should automatically update the product's image list
         setImageDeleteSuccess(true);
-        // Remove the image from the local state immediately for better UX
+        setUploadSuccess(true);
+        
+        // Refresh products from backend to get the updated image list
+        await fetchProducts();
+        
+        // Update local state to reflect the deletion immediately
+        const updatedImageUrls = (product.imageUrls || []).filter((id, idx) => idx !== imgIdx);
         setEditedData(prev => prev.map((row, idx) => {
           if (idx === imageDialogRowIndex) {
-            const imageUrls = Array.isArray(row.imageUrls) ? [...row.imageUrls] : [];
-            imageUrls.splice(imgIdx, 1);
-            return { ...row, imageUrls };
+            return { ...row, imageUrls: updatedImageUrls };
           }
           return row;
         }));
-        // Do NOT call fetchProducts() here to avoid UI blinking
+        
+        // Clear success message after a delay
+        setTimeout(() => {
+          setImageDeleteSuccess(false);
+          setUploadSuccess(false);
+        }, 2000);
+      } else {
+        const errorText = await deleteResponse.text();
+        console.error('Failed to delete image:', errorText);
+        setUploadError('Failed to delete image from server.');
       }
     } catch (e) {
-      // Optionally show error
+      console.error('Error deleting image:', e);
+      setUploadError('Error deleting image. Please try again.');
     }
     setDeletingImageIdx(null);
   };
@@ -532,23 +902,16 @@ function TableView() {
     }
     setPendingImageFiles([]);
     setPendingDeleteIndexes([]);
-    // Save the updated image ID list to backend
-    try {
-      const response = await fetch(API_ENDPOINTS.PRODUCT_IMAGES(productId), {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(imageIds),
-      });
-      if (response.ok) {
-        setImageEditSaveSuccess(true);
-        await fetchProducts();
-        setEditMode(false);
-        setEditField(null);
-        setImageDialogEditMode(false);
-        setImageDialogOpen(false);
-      }
-    } catch (e) {
-      // Optionally show error
+    
+    // Backend should automatically update the product's image list when images are uploaded/deleted
+    // Just refresh the data from backend to ensure UI is in sync
+    if (imageIds.length > 0 || pendingImageFiles.length > 0) {
+      setImageEditSaveSuccess(true);
+      await fetchProducts();
+      setEditMode(false);
+      setEditField(null);
+      setImageDialogEditMode(false);
+      setImageDialogOpen(false);
     }
   };
 
@@ -699,12 +1062,16 @@ function TableView() {
     const product = editedData[imageDialogRowIndex];
     const productId = product?.id;
     if (!productId || isNaN(Number(productId))) return;
+    
+    setUploading(true);
     let newImageIds = [];
+    
+    // Upload all pending files
     for (const file of pendingImageFiles) {
       const formData = new FormData();
       formData.append('image', file);
       try {
-        const response = await fetch(`http://localhost:8080/api/products/${productId}/images`, {
+        const response = await fetch(API_ENDPOINTS.PRODUCT_IMAGES(productId), {
           method: 'POST',
           body: formData,
         });
@@ -713,17 +1080,32 @@ function TableView() {
           newImageIds.push(imageId);
         }
       } catch (e) {
-        // Optionally show error
+        console.error('Error uploading image:', e);
       }
     }
+    
+    // Update local state with new image IDs immediately for better UX
+    const updatedImageIds = [...(product.imageUrls || []).filter(id => !!id && !isNaN(Number(id))), ...newImageIds];
+    
     setEditedData(prev => prev.map((row, idx) => {
       if (idx === imageDialogRowIndex) {
-        const imageIds = Array.isArray(row.imageUrls) ? [...row.imageUrls] : [];
-        return { ...row, imageUrls: [...imageIds, ...newImageIds] };
+        return { ...row, imageUrls: updatedImageIds };
       }
       return row;
     }));
-    setPendingImageFiles([]);
+    
+    // Backend should automatically update the product's image list when images are uploaded
+    // Just refresh the data from backend to ensure UI is in sync
+    if (newImageIds.length > 0) {
+      setUploadSuccess(true);
+      setPendingImageFiles([]);
+      // Refresh products from backend to get the updated image list
+      await fetchProducts();
+    } else {
+      setUploadError('No images were uploaded successfully.');
+    }
+    
+    setUploading(false);
   };
 
   const handleRequestDeleteImage = (imgIdx) => {
@@ -780,14 +1162,52 @@ function TableView() {
         Cell: ({ row }) => row.index + 1,
       },
       {
+        accessorKey: 'isDisabled',
+        header: 'Status',
+        size: 90,
+        Cell: ({ row }) => {
+          const disabled = !!row.original?.isDisabled;
+          return (
+            <Typography
+              variant="body2"
+              sx={{ fontWeight: 600, color: disabled ? 'error.main' : 'success.main' }}
+            >
+              {disabled ? 'Disabled' : 'Active'}
+            </Typography>
+          );
+        },
+      },
+      {
         accessorKey: 'name',
         header: 'Product Name',
-        Cell: ({ cell }) => {
+        Cell: ({ cell, row }) => {
           const value = cell.getValue();
-          if (typeof value === 'object' && value !== null) {
-            return value[i18n.language] || value.en || Object.values(value)[0] || '';
-          }
-          return value;
+          const displayValue = typeof value === 'object' && value !== null
+            ? value[i18n.language] || value.en || Object.values(value)[0] || ''
+            : value;
+          return (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Typography variant="body2" sx={{ flex: 1 }}>
+                {displayValue}
+              </Typography>
+              <Tooltip title="Edit Name">
+                <span>
+                  <Button
+                    color="primary"
+                    size="small"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleEditProduct(row.original);
+                    }}
+                    disabled={saving || row.original?.isDisabled}
+                    sx={{ minWidth: 32, minHeight: 32, p: 0.5 }}
+                  >
+                    <EditIcon fontSize="small" />
+                  </Button>
+                </span>
+              </Tooltip>
+            </Box>
+          );
         },
       },
       {
@@ -923,22 +1343,32 @@ function TableView() {
       },
       {
         id: 'actions',
-        header: 'Delete',
-        size: 60,
+        header: 'Actions',
+        size: 120,
         Cell: ({ row }) => (
-          <Button
-            color="error"
-            size="small"
-            onClick={() => { setRowToDelete(row.original); setDeleteDialogOpen(true); }}
-            disabled={saving}
-            title="Delete Product"
-          >
-            <DeleteForeverIcon />
-          </Button>
+          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+            <Tooltip title="Delete Product">
+              <span>
+                <Button
+                  color="error"
+                  size="small"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setRowToDelete(row.original);
+                    setDeleteDialogOpen(true);
+                  }}
+                  disabled={saving}
+                  sx={{ minWidth: 40, minHeight: 40 }}
+                >
+                  <DeleteForeverIcon fontSize="small" />
+                </Button>
+              </span>
+            </Tooltip>
+          </Box>
         ),
       },
     ],
-    [editMode, editField, editedData, i18n.language, priceHistories]
+    [editMode, editField, editedData, i18n.language, priceHistories, saving, handleEditProduct]
   );
 
   if (loading) {
@@ -1076,27 +1506,72 @@ function TableView() {
           </Button>
         )}
       </Box>
+      {/* Show action buttons when products are selected in edit mode */}
+      {editMode && Object.keys(rowSelection).filter(key => rowSelection[key]).length > 0 && (
+        <Box sx={{ display: 'flex', justifyContent: 'flex-start', mb: 2, gap: 2, p: 2, bgcolor: 'action.hover', borderRadius: 2 }}>
+          <Typography variant="body1" sx={{ display: 'flex', alignItems: 'center', mr: 2 }}>
+            {Object.keys(rowSelection).filter(key => rowSelection[key]).length} product(s) selected
+          </Typography>
+          <Button
+            variant="contained"
+            color="warning"
+            onClick={handleDisableSelectedProducts}
+            disabled={saving}
+            sx={{ fontWeight: 600, borderRadius: 2 }}
+          >
+            Disable Product
+          </Button>
+          <Button
+            variant="contained"
+            color="success"
+            onClick={handleEnableSelectedProducts}
+            disabled={saving}
+            sx={{ fontWeight: 600, borderRadius: 2 }}
+          >
+            Enable Product
+          </Button>
+          <Button
+            variant="contained"
+            color="error"
+            onClick={handleDeleteSelectedProducts}
+            disabled={saving}
+            sx={{ fontWeight: 600, borderRadius: 2 }}
+          >
+            Delete Product
+          </Button>
+        </Box>
+      )}
       <MaterialReactTable
         key={i18n.language}
         columns={columns}
         data={editMode ? editedData.filter(p => isNumericId(p.id)) : data.filter(p => isNumericId(p.id))}
         enablePagination={false}
+        enableRowSelection={editMode}
+        getRowId={(row) => row.id.toString()}
+        onRowSelectionChange={setRowSelection}
+        state={{
+          rowSelection,
+        }}
         initialState={{
           density: 'compact',
         }}
-        muiTableBodyRowProps={{
-          sx: {
-            '&:nth-of-type(odd)': {
-              backgroundColor: 'background.default',
+        muiTableBodyRowProps={({ row }) => {
+          const disabled = row?.original?.isDisabled;
+          return {
+            sx: {
+              '&:nth-of-type(odd)': {
+                backgroundColor: disabled ? 'action.disabledBackground' : 'background.default',
+              },
+              '&:nth-of-type(even)': {
+                backgroundColor: disabled ? 'action.disabledBackground' : 'background.paper',
+              },
+              '&:hover': {
+                backgroundColor: disabled ? 'action.disabledBackground' : 'rgba(46,125,50,0.08)',
+                transition: 'background 0.2s',
+              },
+              opacity: disabled ? 0.6 : 1,
             },
-            '&:nth-of-type(even)': {
-              backgroundColor: 'background.paper',
-            },
-            '&:hover': {
-              backgroundColor: 'rgba(46,125,50,0.08)',
-              transition: 'background 0.2s',
-            },
-          },
+          };
         }}
         muiTableHeadCellProps={{
           sx: {
@@ -1131,7 +1606,7 @@ function TableView() {
                   color="primary"
                   startIcon={saving ? <CircularProgress size={20} color="inherit" /> : <SaveIcon />}
                   sx={{ fontWeight: 600, borderRadius: 3, px: 2.5, py: 1.2, boxShadow: 3, transition: 'transform 0.2s, box-shadow 0.2s', '&:hover': { transform: 'scale(1.08)', boxShadow: 6 } }}
-                  onClick={handleSave}
+                  onClick={() => setConfirmSaveOpen(true)}
                   disabled={saving}
                 >
                   {saving ? 'Saving...' : 'Save'}
@@ -1578,6 +2053,159 @@ function TableView() {
           )}
         </DialogActions>
       </Dialog>
+      {/* Edit Product Dialog */}
+      <Dialog open={editProductDialogOpen} onClose={handleCloseEditProductDialog} PaperProps={{ sx: { borderRadius: "15px", boxShadow: 2 } }}>
+        <DialogTitle sx={{ fontWeight: 700, color: 'primary.main', fontSize: 22 }}>Edit Product</DialogTitle>
+        <DialogContent>
+          <Box sx={{ mb: 2, p: 1.5, bgcolor: 'info.light', borderRadius: 1, border: '1px solid', borderColor: 'info.main' }}>
+            <Typography variant="body2" sx={{ color: 'info.contrastText', fontSize: 13 }}>
+              💡 <strong>Auto-translation:</strong> When you change product name or description in English, it will automatically translate to Hindi and Telugu.
+            </Typography>
+          </Box>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
+            <TextField
+              label="Category"
+              value={editProductForm.category}
+              onChange={e => handleEditProductFieldChange('category', e.target.value)}
+              fullWidth
+              size="small"
+              disabled={updatingProduct}
+            />
+            <Box sx={{ display: 'flex', gap: 1 }}>
+              <TextField
+                label="Name (EN)"
+                value={editProductForm.name.en}
+                onChange={e => handleEditProductFieldChange('name', e.target.value, 'en')}
+                size="small"
+                fullWidth
+                disabled={updatingProduct}
+              />
+              <TextField
+                label="Name (HI)"
+                value={editProductForm.name.hi}
+                onChange={e => handleEditProductFieldChange('name', e.target.value, 'hi')}
+                size="small"
+                fullWidth
+                disabled={updatingProduct}
+                InputProps={{
+                  endAdornment: translating && (
+                    <Box sx={{ display: 'flex', alignItems: 'center', mr: 1 }}>
+                      <CircularProgress size={16} />
+                      <Typography variant="caption" sx={{ ml: 0.5, color: 'text.secondary' }}>
+                        Translating...
+                      </Typography>
+                    </Box>
+                  )
+                }}
+              />
+              <TextField
+                label="Name (TE)"
+                value={editProductForm.name.te}
+                onChange={e => handleEditProductFieldChange('name', e.target.value, 'te')}
+                size="small"
+                fullWidth
+                disabled={updatingProduct}
+                InputProps={{
+                  endAdornment: translating && (
+                    <Box sx={{ display: 'flex', alignItems: 'center', mr: 1 }}>
+                      <CircularProgress size={16} />
+                      <Typography variant="caption" sx={{ ml: 0.5, color: 'text.secondary' }}>
+                        Translating...
+                      </Typography>
+                    </Box>
+                  )
+                }}
+              />
+            </Box>
+            <Box sx={{ display: 'flex', gap: 1 }}>
+              <TextField
+                label="Description (EN)"
+                value={editProductForm.description.en}
+                onChange={e => handleEditProductFieldChange('description', e.target.value, 'en')}
+                size="small"
+                fullWidth
+                multiline
+                minRows={2}
+                disabled={updatingProduct}
+              />
+              <TextField
+                label="Description (HI)"
+                value={editProductForm.description.hi}
+                onChange={e => handleEditProductFieldChange('description', e.target.value, 'hi')}
+                size="small"
+                fullWidth
+                multiline
+                minRows={2}
+                disabled={updatingProduct}
+                InputProps={{
+                  endAdornment: translating && (
+                    <Box sx={{ display: 'flex', alignItems: 'center', mr: 1 }}>
+                      <CircularProgress size={16} />
+                      <Typography variant="caption" sx={{ ml: 0.5, color: 'text.secondary' }}>
+                        Translating...
+                      </Typography>
+                    </Box>
+                  )
+                }}
+              />
+              <TextField
+                label="Description (TE)"
+                value={editProductForm.description.te}
+                onChange={e => handleEditProductFieldChange('description', e.target.value, 'te')}
+                size="small"
+                fullWidth
+                multiline
+                minRows={2}
+                disabled={updatingProduct}
+                InputProps={{
+                  endAdornment: translating && (
+                    <Box sx={{ display: 'flex', alignItems: 'center', mr: 1 }}>
+                      <CircularProgress size={16} />
+                      <Typography variant="caption" sx={{ ml: 0.5, color: 'text.secondary' }}>
+                        Translating...
+                      </Typography>
+                    </Box>
+                  )
+                }}
+              />
+            </Box>
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button
+            onClick={handleCloseEditProductDialog}
+            color="inherit"
+            variant="outlined"
+            sx={cancelButtonSx}
+            disabled={updatingProduct}
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={handleUpdateProduct}
+            color="primary"
+            variant="contained"
+            sx={{
+              fontWeight: 700,
+              borderRadius: 2,
+              px: 2.5,
+              py: 1.2,
+              transition: 'all 0.2s',
+              backgroundColor: 'primary.main',
+              color: '#fff',
+              boxShadow: 2,
+              '&:hover': {
+                backgroundColor: 'primary.dark',
+                transform: 'scale(1.05)',
+                boxShadow: 3,
+              },
+            }}
+            disabled={updatingProduct || !editProductForm.name.en}
+          >
+            {updatingProduct ? 'Updating...' : 'Update Product'}
+          </Button>
+        </DialogActions>
+      </Dialog>
       {/* Image Dialog */}
       <Dialog open={imageDialogOpen} onClose={handleCloseImageDialog} maxWidth="sm" fullWidth PaperProps={{ sx: { borderRadius: '10px', boxShadow: 2 } }}>
         <DialogTitle sx={{ fontWeight: 600, fontSize: 20, pb: 0.5 }}>
@@ -1622,7 +2250,7 @@ function TableView() {
                             {imageDialogEditMode && (
                               <Tooltip title="Delete Image">
                                 <span>
-                                  <Button onClick={() => handleRequestDeleteImage(idx)} color="error" size="small" sx={{ minWidth: 0 }} disabled={deletingImageIdx === idx}>
+                                  <Button onClick={() => handleImageDialogDeleteImage(idx)} color="error" size="small" sx={{ minWidth: 0 }} disabled={deletingImageIdx === idx}>
                                     {deletingImageIdx === idx ? <CircularProgress size={18} color="inherit" /> : <DeleteIcon fontSize="small" />}
                                   </Button>
                                 </span>
@@ -1681,17 +2309,40 @@ function TableView() {
                           color="primary"
                           onClick={async () => {
                             await handleUploadPendingImage();
-                            setImageEditSaveSuccess(true);
-                            setEditMode(false);
-                            setEditField(null);
-                            setImageDialogEditMode(false);
-                            setImageDialogOpen(false);
+                            if (uploadSuccess && !uploadError) {
+                              setImageEditSaveSuccess(true);
+                              // Close dialog after a brief delay to show success message
+                              setTimeout(() => {
+                                setEditMode(false);
+                                setEditField(null);
+                                setImageDialogEditMode(false);
+                                setImageDialogOpen(false);
+                                setImageEditSaveSuccess(false);
+                                setUploadSuccess(false);
+                              }, 1000);
+                            }
                           }}
+                          disabled={uploading}
                           sx={{ ml: 2, fontWeight: 600, borderRadius: 2, boxShadow: 1 }}
                         >
-                          Upload
+                          {uploading ? 'Uploading...' : 'Upload'}
                         </Button>
                       </Box>
+                    )}
+                    {uploadError && (
+                      <Typography variant="body2" color="error" sx={{ mt: 1, fontSize: 13 }}>
+                        {uploadError}
+                      </Typography>
+                    )}
+                    {uploadSuccess && !uploadError && (
+                      <Typography variant="body2" color="success.main" sx={{ mt: 1, fontSize: 13 }}>
+                        {imageDeleteSuccess ? 'Image deleted successfully!' : 'Images uploaded successfully!'}
+                      </Typography>
+                    )}
+                    {imageDeleteSuccess && (
+                      <Typography variant="body2" color="success.main" sx={{ mt: 1, fontSize: 13 }}>
+                        Image deleted successfully!
+                      </Typography>
                     )}
                   </>
                 )}
@@ -1727,6 +2378,102 @@ function TableView() {
           ✅ Product name translated successfully!
         </MuiAlert>
       </Snackbar>
+
+      {/* Confirmation Dialog - Delete Selected Products */}
+      <Dialog open={confirmDeleteSelectedOpen} onClose={() => setConfirmDeleteSelectedOpen(false)} PaperProps={{ sx: { borderRadius: '10px', boxShadow: 2 } }}>
+        <DialogTitle sx={{ fontWeight: 700, color: 'error.main', fontSize: 22 }}>Confirm Delete</DialogTitle>
+        <DialogContent>
+          Are you sure you want to delete {Object.keys(rowSelection).filter(key => rowSelection[key]).length} selected product(s)? This action cannot be undone.
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmDeleteSelectedOpen(false)} color="inherit" variant="outlined" sx={{ fontWeight: 600, borderRadius: 1.5, px: 1.5, py: 0.7 }}>
+            Cancel
+          </Button>
+          <Button onClick={confirmDeleteSelectedProducts} color="error" variant="contained" autoFocus sx={{ fontWeight: 600, borderRadius: 1.5, px: 1.5, py: 0.7 }}>
+            Delete
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Confirmation Dialog - Disable Selected Products */}
+      <Dialog open={confirmDisableOpen} onClose={() => setConfirmDisableOpen(false)} PaperProps={{ sx: { borderRadius: '10px', boxShadow: 2 } }}>
+        <DialogTitle sx={{ fontWeight: 700, color: 'warning.main', fontSize: 22 }}>Confirm Disable</DialogTitle>
+        <DialogContent>
+          Are you sure you want to disable {Object.keys(rowSelection).filter(key => rowSelection[key]).length} selected product(s)? Disabled products will not be visible to customers.
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmDisableOpen(false)} color="inherit" variant="outlined" sx={{ fontWeight: 600, borderRadius: 1.5, px: 1.5, py: 0.7 }}>
+            Cancel
+          </Button>
+          <Button onClick={confirmDisableSelectedProducts} color="warning" variant="contained" autoFocus sx={{ fontWeight: 600, borderRadius: 1.5, px: 1.5, py: 0.7 }}>
+            Disable
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Confirmation Dialog - Enable Selected Products */}
+      <Dialog open={confirmEnableOpen} onClose={() => setConfirmEnableOpen(false)} PaperProps={{ sx: { borderRadius: '10px', boxShadow: 2 } }}>
+        <DialogTitle sx={{ fontWeight: 700, color: 'success.main', fontSize: 22 }}>Confirm Enable</DialogTitle>
+        <DialogContent>
+          Are you sure you want to enable {Object.keys(rowSelection).filter(key => rowSelection[key]).length} selected product(s)? Enabled products will be visible to customers.
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmEnableOpen(false)} color="inherit" variant="outlined" sx={{ fontWeight: 600, borderRadius: 1.5, px: 1.5, py: 0.7 }}>
+            Cancel
+          </Button>
+          <Button onClick={confirmEnableSelectedProducts} color="success" variant="contained" autoFocus sx={{ fontWeight: 600, borderRadius: 1.5, px: 1.5, py: 0.7 }}>
+            Enable
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Confirmation Dialog - Save Changes */}
+      <Dialog open={confirmSaveOpen} onClose={() => setConfirmSaveOpen(false)} PaperProps={{ sx: { borderRadius: '10px', boxShadow: 2 } }}>
+        <DialogTitle sx={{ fontWeight: 700, color: 'primary.main', fontSize: 22 }}>Confirm Save</DialogTitle>
+        <DialogContent>
+          Are you sure you want to save all changes? This will update product prices in the database.
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmSaveOpen(false)} color="inherit" variant="outlined" sx={{ fontWeight: 600, borderRadius: 1.5, px: 1.5, py: 0.7 }}>
+            Cancel
+          </Button>
+          <Button onClick={handleSave} color="primary" variant="contained" autoFocus sx={{ fontWeight: 600, borderRadius: 1.5, px: 1.5, py: 0.7 }}>
+            Save
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Confirmation Dialog - Add Product */}
+      <Dialog open={confirmAddProductOpen} onClose={() => setConfirmAddProductOpen(false)} PaperProps={{ sx: { borderRadius: '10px', boxShadow: 2 } }}>
+        <DialogTitle sx={{ fontWeight: 700, color: 'primary.main', fontSize: 22 }}>Confirm Add Product</DialogTitle>
+        <DialogContent>
+          Are you sure you want to add this product? Make sure all required fields are filled correctly.
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmAddProductOpen(false)} color="inherit" variant="outlined" sx={{ fontWeight: 600, borderRadius: 1.5, px: 1.5, py: 0.7 }}>
+            Cancel
+          </Button>
+          <Button onClick={confirmAddProduct} color="primary" variant="contained" autoFocus sx={{ fontWeight: 600, borderRadius: 1.5, px: 1.5, py: 0.7 }}>
+            Add Product
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Confirmation Dialog - Update Product */}
+      <Dialog open={confirmUpdateProductOpen} onClose={() => setConfirmUpdateProductOpen(false)} PaperProps={{ sx: { borderRadius: '10px', boxShadow: 2 } }}>
+        <DialogTitle sx={{ fontWeight: 700, color: 'primary.main', fontSize: 22 }}>Confirm Update</DialogTitle>
+        <DialogContent>
+          Are you sure you want to update this product? This will modify the product name, description, and category.
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmUpdateProductOpen(false)} color="inherit" variant="outlined" sx={{ fontWeight: 600, borderRadius: 1.5, px: 1.5, py: 0.7 }}>
+            Cancel
+          </Button>
+          <Button onClick={confirmUpdateProduct} color="primary" variant="contained" autoFocus sx={{ fontWeight: 600, borderRadius: 1.5, px: 1.5, py: 0.7 }}>
+            Update
+          </Button>
+        </DialogActions>
+      </Dialog>
 
     </Box>
   );

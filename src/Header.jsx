@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { API_ENDPOINTS } from './config.js';
+import { API_ENDPOINTS, TRANSLATION_CONFIG } from './config.js';
 import {
   AppBar,
   Toolbar,
@@ -55,7 +55,7 @@ import Avatar from '@mui/material/Avatar';
 import ListItemAvatar from '@mui/material/ListItemAvatar';
 import ListItemIcon from '@mui/material/ListItemIcon';
 
-const appName = 'Saini Mewa Stores';
+const appName = 'Saini Dry Fruits';
 
 function Header({ user, onLogout, onHomeClick, onUpdatePriceClick, onAddGreetingsClick }) {
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -68,10 +68,12 @@ function Header({ user, onLogout, onHomeClick, onUpdatePriceClick, onAddGreeting
   const notificationOpen = Boolean(notificationAnchorEl);
   const profileOpen = Boolean(profileAnchorEl);
   const [bannerDialogOpen, setBannerDialogOpen] = useState(false);
-  const [bannerText, setBannerText] = useState('');
+  const [bannerText, setBannerText] = useState({ en: '', hi: '', te: '' });
   const [bannerLoading, setBannerLoading] = useState(false);
   const [bannerError, setBannerError] = useState('');
   const [bannerSuccess, setBannerSuccess] = useState('');
+  const [bannerTranslating, setBannerTranslating] = useState(false);
+  const translationTimeoutRef = React.useRef(null);
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
   const navigate = useNavigate();
@@ -260,23 +262,94 @@ function Header({ user, onLogout, onHomeClick, onUpdatePriceClick, onAddGreeting
 
   const userName = user?.name || user?.email || 'User';
 
+  // Function to translate text using MyMemory API
+  const translateBannerText = async (text, targetLang) => {
+    try {
+      const langMap = {
+        'hi': 'hi',
+        'te': 'te'
+      };
+      
+      const targetLangCode = langMap[targetLang];
+      if (!targetLangCode) return '';
+      
+      const response = await fetch(`${TRANSLATION_CONFIG.MYMEMORY_API}?q=${encodeURIComponent(text)}&langpair=en|${targetLangCode}`);
+      
+      if (response.ok) {
+        const data = await response.json();
+        if (data.responseStatus === 200) {
+          return data.responseData.translatedText;
+        }
+      }
+      return '';
+    } catch (error) {
+      console.error('Translation error:', error);
+      return '';
+    }
+  };
+
   const handleBannerDialogOpen = () => {
     setBannerDialogOpen(true);
-    setBannerText('');
+    setBannerText({ en: '', hi: '', te: '' });
     setBannerError('');
     setBannerSuccess('');
   };
 
   const handleBannerDialogClose = () => {
+    // Clear any pending translation timeout
+    if (translationTimeoutRef.current) {
+      clearTimeout(translationTimeoutRef.current);
+      translationTimeoutRef.current = null;
+    }
     setBannerDialogOpen(false);
-    setBannerText('');
+    setBannerText({ en: '', hi: '', te: '' });
     setBannerError('');
     setBannerSuccess('');
+    setBannerTranslating(false);
+  };
+
+  const handleBannerTextChange = (lang, value) => {
+    // Update the text immediately for responsive typing
+    setBannerText(prev => ({ ...prev, [lang]: value }));
+    
+    // Auto-translate when English text is changed (debounced)
+    if (lang === 'en') {
+      // Clear previous timeout
+      if (translationTimeoutRef.current) {
+        clearTimeout(translationTimeoutRef.current);
+      }
+      
+      // Set new timeout - translate after user stops typing for 800ms
+      translationTimeoutRef.current = setTimeout(async () => {
+        if (value.trim()) {
+          setBannerTranslating(true);
+          
+          try {
+            const [hindiText, teluguText] = await Promise.all([
+              translateBannerText(value, 'hi'),
+              translateBannerText(value, 'te')
+            ]);
+            
+            setBannerText(current => ({
+              ...current,
+              en: value,
+              hi: hindiText || current.hi,
+              te: teluguText || current.te
+            }));
+          } catch (error) {
+            console.error('Translation error:', error);
+          } finally {
+            setBannerTranslating(false);
+          }
+        }
+      }, 800); // Wait 800ms after user stops typing
+    }
   };
 
   const handleBannerSubmit = async () => {
-    if (!bannerText.trim()) {
-      setBannerError('Please enter banner text');
+    // Validate that English text is provided
+    if (!bannerText.en || !bannerText.en.trim()) {
+      setBannerError('Please enter banner text in English (EN)');
       return;
     }
 
@@ -288,22 +361,29 @@ function Header({ user, onLogout, onHomeClick, onUpdatePriceClick, onAddGreeting
       const response = await fetch(API_ENDPOINTS.BANNER_TEXT, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: bannerText.trim() })
+        body: JSON.stringify({ 
+          text: {
+            en: bannerText.en.trim(),
+            hi: bannerText.hi?.trim() || '',
+            te: bannerText.te?.trim() || ''
+          },
+          isActive: true
+        })
       });
 
       const data = await response.json();
 
-      if (response.ok) {
-        setBannerSuccess('Banner text added successfully!');
-        setBannerText('');
+      if (response.ok && data.success) {
+        setBannerSuccess('Banner text updated successfully!');
+        setBannerText({ en: '', hi: '', te: '' });
         setTimeout(() => {
           handleBannerDialogClose();
         }, 1500);
       } else {
-        setBannerError(data.error || data.message || 'Failed to add banner text. Please try again.');
+        setBannerError(data.message || data.error || 'Failed to update banner text. Please try again.');
       }
     } catch (err) {
-      console.error('Error adding banner text:', err);
+      console.error('Error updating banner text:', err);
       setBannerError('Network error. Please try again.');
     } finally {
       setBannerLoading(false);
@@ -754,17 +834,54 @@ function Header({ user, onLogout, onHomeClick, onUpdatePriceClick, onAddGreeting
               {bannerSuccess}
             </Alert>
           )}
-          <TextField
-            label="Banner Text"
-            multiline
-            rows={4}
-            fullWidth
-            value={bannerText}
-            onChange={(e) => setBannerText(e.target.value)}
-            placeholder="Enter banner text to display..."
-            sx={{ mt: 1 }}
-            disabled={bannerLoading}
-          />
+          <Box sx={{ mb: 2, p: 1.5, bgcolor: 'info.light', borderRadius: 1, border: '1px solid', borderColor: 'info.main' }}>
+            <Typography variant="body2" sx={{ color: 'info.contrastText', fontSize: 13 }}>
+              💡 <strong>Auto-translation:</strong> When you enter banner text in English, it will automatically translate to Hindi and Telugu.
+            </Typography>
+          </Box>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
+            <TextField
+              label="Banner Text (EN) *"
+              multiline
+              rows={3}
+              fullWidth
+              value={bannerText.en}
+              onChange={(e) => handleBannerTextChange('en', e.target.value)}
+              placeholder="Enter banner text in English..."
+              disabled={bannerLoading}
+              required
+              InputProps={{
+                endAdornment: bannerTranslating && (
+                  <Box sx={{ display: 'flex', alignItems: 'center', mr: 1 }}>
+                    <CircularProgress size={16} />
+                    <Typography variant="caption" sx={{ ml: 0.5, color: 'text.secondary' }}>
+                      Translating...
+                    </Typography>
+                  </Box>
+                )
+              }}
+            />
+            <TextField
+              label="Banner Text (HI)"
+              multiline
+              rows={3}
+              fullWidth
+              value={bannerText.hi}
+              onChange={(e) => handleBannerTextChange('hi', e.target.value)}
+              placeholder="Enter banner text in Hindi (auto-translated)..."
+              disabled={bannerLoading || bannerTranslating}
+            />
+            <TextField
+              label="Banner Text (TE)"
+              multiline
+              rows={3}
+              fullWidth
+              value={bannerText.te}
+              onChange={(e) => handleBannerTextChange('te', e.target.value)}
+              placeholder="Enter banner text in Telugu (auto-translated)..."
+              disabled={bannerLoading || bannerTranslating}
+            />
+          </Box>
         </DialogContent>
         <DialogActions>
           <Button 
@@ -777,9 +894,9 @@ function Header({ user, onLogout, onHomeClick, onUpdatePriceClick, onAddGreeting
             onClick={handleBannerSubmit}
             variant="contained"
             color="primary"
-            disabled={bannerLoading || !bannerText.trim()}
+            disabled={bannerLoading || !bannerText.en?.trim() || bannerTranslating}
           >
-            {bannerLoading ? 'Adding...' : 'Add Banner'}
+            {bannerLoading ? 'Updating...' : 'Update Banner'}
           </Button>
         </DialogActions>
       </Dialog>
